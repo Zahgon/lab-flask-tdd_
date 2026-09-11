@@ -1,5 +1,5 @@
 """
-CLI Command Extensions for Flask
+CLI Command Extensions
 """
 
 import os
@@ -8,12 +8,17 @@ from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
 # pylint: disable=unused-import
-from wsgi import app  # noqa: F401
+from asgi import app  # noqa: F401
+from service.models import db  # noqa: E402
 from service.common.cli_commands import db_create  # noqa: E402
 
+DATABASE_URI = os.getenv(
+    "DATABASE_URI", "postgresql+psycopg://postgres:postgres@localhost:5432/testdb"
+)
 
-class TestFlaskCLI(TestCase):
-    """Flask CLI Command Tests"""
+
+class TestCLI(TestCase):
+    """CLI Command Tests"""
 
     def setUp(self):
         self.runner = CliRunner()
@@ -22,6 +27,12 @@ class TestFlaskCLI(TestCase):
     def test_db_create(self, db_mock):
         """It should call the db-create command"""
         db_mock.return_value = MagicMock()
-        with patch.dict(os.environ, {"FLASK_APP": "wsgi:app"}, clear=True):
+        with patch.dict(os.environ, {}, clear=True):
             result = self.runner.invoke(db_create)
             self.assertEqual(result.exit_code, 0)
+
+    def test_db_create_initializes_engine(self):
+        """It should build the tables when no engine exists yet"""
+        db.init_engine(DATABASE_URI)
+        result = self.runner.invoke(db_create)
+        self.assertEqual(result.exit_code, 0)

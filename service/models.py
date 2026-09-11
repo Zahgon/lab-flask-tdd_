@@ -36,17 +36,66 @@ import logging
 from datetime import date
 from enum import Enum
 from retry import retry
-from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Integer,
+    String,
+    create_engine,
+    func,
+)
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 # global variables for retry (must be int)
 RETRY_COUNT = int(os.environ.get("RETRY_COUNT", 5))
 RETRY_DELAY = int(os.environ.get("RETRY_DELAY", 1))
 RETRY_BACKOFF = int(os.environ.get("RETRY_BACKOFF", 2))
 
-logger = logging.getLogger("flask.app")
+logger = logging.getLogger("petstore")
 
-# Create the SQLAlchemy object to be initialized later in init_db()
-db = SQLAlchemy()
+Base = declarative_base()
+
+
+class _Database:
+    """Minimal SQLAlchemy holder that replaces the Flask-SQLAlchemy extension
+
+    Flask-SQLAlchemy bound a session to the Flask application context. FastAPI
+    has no such context, so a thread-local `scoped_session` is used instead and
+    removed at the end of every request (see service/__init__.py).
+    """
+
+    def __init__(self):
+        self.engine = None
+        self.session = scoped_session(
+            sessionmaker(autocommit=False, autoflush=False, future=True)
+        )
+
+    def init_engine(self, database_uri: str) -> None:
+        """Creates the engine and binds the session factory to it"""
+        connect_args = {}
+        if database_uri.startswith("sqlite"):
+            # SQLite defaults to a single-thread guard that breaks under ASGI
+            connect_args["check_same_thread"] = False
+        self.engine = create_engine(
+            database_uri, future=True, connect_args=connect_args
+        )
+        self.session.remove()
+        self.session.configure(bind=self.engine)
+
+    def create_all(self) -> None:
+        """Creates all of the tables"""
+        Base.metadata.create_all(self.engine)
+
+    def drop_all(self) -> None:
+        """Drops all of the tables"""
+        Base.metadata.drop_all(self.engine)
+
+
+# Create the database object to be initialized later in init_engine()
+db = _Database()
 
 
 @retry(
@@ -73,7 +122,7 @@ class Gender(Enum):
     UNKNOWN = 3
 
 
-class Pet(db.Model):
+class Pet(Base):
     """
     Class that represents a Pet
 
@@ -81,22 +130,26 @@ class Pet(db.Model):
     from us by SQLAlchemy's object relational mappings (ORM)
     """
 
+    __tablename__ = "pet"
+
     ##################################################
     # Table Schema
     ##################################################
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(63), nullable=False)
-    category = db.Column(db.String(63), nullable=False)
-    available = db.Column(db.Boolean(), nullable=False, default=False)
-    gender = db.Column(
-        db.Enum(Gender), nullable=False, server_default=(Gender.UNKNOWN.name)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(63), nullable=False)
+    category = Column(String(63), nullable=False)
+    available = Column(Boolean(), nullable=False, default=False)
+    gender = Column(
+        SAEnum(Gender), nullable=False, server_default=(Gender.UNKNOWN.name)
     )
-    birthday = db.Column(db.Date(), nullable=False, default=date.today())
+    birthday = Column(Date(), nullable=False, default=date.today())
     # Database auditing fields
-    created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
-    last_updated = db.Column(
-        db.DateTime, default=db.func.now(), onupdate=db.func.now(), nullable=False
+    # pylint: disable=not-callable
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    last_updated = Column(
+        DateTime, default=func.now(), onupdate=func.now(), nullable=False
     )
+    # pylint: enable=not-callable
 
     ##################################################
     # INSTANCE METHODS
@@ -197,7 +250,7 @@ class Pet(db.Model):
     def all(cls) -> list:
         """Returns all of the Pets in the database"""
         logger.info("Processing all Pets")
-        return cls.query.all()
+        return db.session.query(cls).all()
 
     @classmethod
     def find(cls, pet_id: int):
@@ -211,4 +264,4 @@ class Pet(db.Model):
 
         """
         logger.info("Processing lookup for id %s ...", pet_id)
-        return cls.query.session.get(cls, pet_id)
+        return db.session.get(cls, pet_id)

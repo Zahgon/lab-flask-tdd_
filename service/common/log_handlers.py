@@ -23,14 +23,19 @@ consistently
 import logging
 
 
-def init_logging(app, logger_name: str):
+def init_logging(app_logger: logging.Logger, logger_name: str):
     """Set up logging for production"""
-    app.logger.propagate = False
-    gunicorn_logger = logging.getLogger(logger_name)
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
+    app_logger.propagate = False
+    server_logger = logging.getLogger(logger_name)
+    if server_logger.handlers:
+        app_logger.handlers = server_logger.handlers
+        app_logger.setLevel(server_logger.level)
+    else:  # pragma: no cover
+        handler = logging.StreamHandler()
+        app_logger.handlers = [handler]
+        app_logger.setLevel(logging.INFO)
     # Make all log formats consistent
     formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] [%(module)s] %(message)s", "%Y-%m-%d %H:%M:%S %z")
-    for handler in app.logger.handlers:
+    for handler in app_logger.handlers:
         handler.setFormatter(formatter)
-    app.logger.info("Logging handler established")
+    app_logger.info("Logging handler established")

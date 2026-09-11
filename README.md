@@ -20,7 +20,7 @@ As Software Engineers we need to have the discipline to ensure that our code wor
 
 You can read more about my thoughts on TDD in the article: [A Case for Test Driven Development](https://johnrofrano.medium.com/a-case-for-test-driven-development-7d9a552e0a16)
 
-This lab introduces **Test Driven Development** using `PyUnit` and `PyTest`. It also demonstrates how to create a simple RESTful service using Python Flask and PostgreSQL. The resource model is persistence using SQLAlchemy to keep the application simple. It's purpose is to show the correct API calls and return codes that should be used for a REST API.
+This lab introduces **Test Driven Development** using `PyUnit` and `PyTest`. It also demonstrates how to create a simple RESTful service using Python FastAPI and PostgreSQL. The resource model is persistence using SQLAlchemy to keep the application simple. It's purpose is to show the correct API calls and return codes that should be used for a REST API.
 
 **Note:** The base service code is contained in `routes.py` while the business logic for manipulating Pets is in the `models.py` file. This follows the popular Model View Controller (MVC) separation of duties by keeping the model separate from the controller. As such, we have two test suites: one for the model (`test_models.py`) and one for the service itself (`test_routes.py`)
 
@@ -133,7 +133,7 @@ As a convenience you can aso use:
 make run
 ```
 
-You should be able to reach the service at: http://localhost:8000. The port that is used is controlled by an environment variable defined in the `.flaskenv` file which Flask uses to load it's configuration from the environment by default.
+You should be able to reach the service at the port that `honcho` assigns (http://localhost:5000 by default). The port is controlled by the `PORT` environment variable, which `uvicorn` binds to.
 
 ## Shutdown development environment
 
@@ -154,8 +154,8 @@ vagrant destroy
 
 ## What's featured in the project?
 
-- `service/__init__.py` -- establishes the Flask app factory
-- `service/routes.py` -- the main Service routes using Python Flask
+- `service/__init__.py` -- establishes the FastAPI app factory
+- `service/routes.py` -- the main Service routes using Python FastAPI
 - `service/models.py` -- the data model using SQLAlchemy
 - `tests/test_routes.py` -- test cases against the Pet service
 - `tests/test_models.py` -- test cases against the Pet model

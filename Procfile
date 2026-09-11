@@ -1,1 +1,1 @@
-web: gunicorn --log-file=- --workers=1 --bind=0.0.0.0:$PORT wsgi:app
+web: uvicorn --host=0.0.0.0 --port=$PORT asgi:app

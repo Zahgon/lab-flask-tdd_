@@ -21,7 +21,8 @@ import logging
 from unittest import TestCase
 from unittest.mock import patch
 from datetime import date
-from wsgi import app
+# pylint: disable=unused-import
+from asgi import app  # noqa: F401
 from service.models import Pet, Gender, DataValidationError, db
 from tests.factories import PetFactory
 
@@ -40,11 +41,9 @@ class TestCaseBase(TestCase):
     @classmethod
     def setUpClass(cls):
         """This runs once before the entire test suite"""
-        app.config["TESTING"] = True
-        app.config["DEBUG"] = False
-        app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URI
-        app.logger.setLevel(logging.CRITICAL)
-        app.app_context().push()
+        db.init_engine(DATABASE_URI)
+        db.create_all()
+        logging.getLogger("petstore").setLevel(logging.CRITICAL)
 
     @classmethod
     def tearDownClass(cls):
@@ -66,6 +65,13 @@ class TestCaseBase(TestCase):
 ######################################################################
 class TestPetModel(TestCaseBase):
     """Pet Model CRUD Tests"""
+
+    def test_deserialize_bad_gender_type(self):
+        """It should not deserialize a gender that is not a string"""
+        data = PetFactory().serialize()
+        data["gender"] = 1  # not a string, so .upper() fails
+        pet = Pet()
+        self.assertRaises(DataValidationError, pet.deserialize, data)
 
     ######################################################################
     #  T E S T   C A S E S
