@@ -1,5 +1,5 @@
 ---
-# This manifest deploys a Python Flask application with a Cloudant database
+# This manifest deploys a Python FastAPI application with a Cloudant database
 # To change the hostname deploy with:
 #   cf push "${CF_APP}" -n <new-hostname>
 applications:
@@ -14,6 +14,4 @@ applications:
   timeout: 180
   services:
   - ElephantSQL
-  env:
-    FLASK_APP : service:app
-    FLASK_DEBUG : false
+  command: uvicorn --host=0.0.0.0 --port=$PORT asgi:app

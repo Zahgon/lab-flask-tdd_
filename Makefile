@@ -35,7 +35,7 @@ test: ## Run the unit tests
 .PHONY: db-init
 db-init: ## Initializes the database tables
 	$(info Creating database tables...)
-	@flask db-create
+	@python -m service.common.cli_commands
 
 ##@ Runtime
 

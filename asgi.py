@@ -1,5 +1,5 @@
 """
-Web Server Gateway Interface (WSGI) entry point
+Asynchronous Server Gateway Interface (ASGI) entry point
 """
 
 import os
@@ -10,4 +10,6 @@ PORT = int(os.getenv("PORT", "8000"))
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

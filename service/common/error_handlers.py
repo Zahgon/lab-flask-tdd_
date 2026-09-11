@@ -14,85 +14,184 @@
 """
 Module: error_handlers
 """
-from flask import jsonify
-from flask import current_app as app  # Import Flask application
+import json
+import logging
+import typing
+
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from service.models import DataValidationError
 from . import status
+
+logger = logging.getLogger("petstore")
+
+
+class SortedJSONResponse(JSONResponse):
+    """JSON response that matches the wire format Flask's jsonify() produced
+
+    Flask sorts object keys and uses compact separators by default. Starlette
+    does not sort, so the ordering is restored here to keep responses
+    byte-identical with the original service.
+    """
+
+    def render(self, content: typing.Any) -> bytes:
+        if content is None:
+            return b""
+        return (
+            json.dumps(
+                content,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=None,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+
+
+######################################################################
+# Default descriptions, matching Werkzeug's built-in exception text so
+# that error payloads are unchanged from the Flask implementation.
+######################################################################
+ERROR_NAMES = {
+    status.HTTP_400_BAD_REQUEST: "Bad Request",
+    status.HTTP_404_NOT_FOUND: "Not Found",
+    status.HTTP_405_METHOD_NOT_ALLOWED: "Method Not Allowed",
+    status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: "Unsupported Media Type",
+    status.HTTP_500_INTERNAL_SERVER_ERROR: "Internal Server Error",
+}
+
+DEFAULT_DESCRIPTIONS = {
+    status.HTTP_400_BAD_REQUEST: (
+        "The browser (or proxy) sent a request that this server could not "
+        "understand."
+    ),
+    status.HTTP_404_NOT_FOUND: (
+        "The requested URL was not found on the server. If you entered the URL "
+        "manually please check your spelling and try again."
+    ),
+    status.HTTP_405_METHOD_NOT_ALLOWED: (
+        "The method is not allowed for the requested URL."
+    ),
+    status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: (
+        "The server does not support the media type transmitted in the request."
+    ),
+    status.HTTP_500_INTERNAL_SERVER_ERROR: (
+        "The server encountered an internal error and was unable to complete "
+        "your request. Either the server is overloaded or there is an error in "
+        "the application."
+    ),
+}
+
+# The "error" field of the payload, exactly as the Flask handlers spelled it
+PAYLOAD_ERRORS = {
+    status.HTTP_400_BAD_REQUEST: "Bad Request",
+    status.HTTP_404_NOT_FOUND: "Not Found",
+    status.HTTP_405_METHOD_NOT_ALLOWED: "Method not Allowed",
+    status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: "Unsupported media type",
+    status.HTTP_500_INTERNAL_SERVER_ERROR: "Internal Server Error",
+}
+
+
+def abort(code: int, description: str = None) -> typing.NoReturn:
+    """Raises an HTTP error the way Flask's abort() did
+
+    :param code: the HTTP status code to return
+    :param description: optional detail appended after the status name
+    """
+    raise HTTPException(
+        status_code=code,
+        detail=description or DEFAULT_DESCRIPTIONS.get(code, ""),
+    )
+
+
+def _error_payload(code: int, message: str) -> dict:
+    """Builds the response body shared by every error handler"""
+    return {
+        "status": code,
+        "error": PAYLOAD_ERRORS.get(code, ERROR_NAMES.get(code, "Error")),
+        "message": message,
+    }
+
+
+def _flask_style_message(code: int, description: str) -> str:
+    """Reproduces str(werkzeug.exceptions.HTTPException): '<code> <name>: <desc>'"""
+    name = ERROR_NAMES.get(code, "Error")
+    return f"{code} {name}: {description}"
 
 
 ######################################################################
 # Error Handlers
 ######################################################################
-@app.errorhandler(DataValidationError)
-def request_validation_error(error):
-    """Handles Value Errors from bad data"""
-    return bad_request(error)
+def init_error_handlers(app: FastAPI) -> None:
+    """Registers the error handlers on the FastAPI application"""
 
+    @app.exception_handler(DataValidationError)
+    async def request_validation_error(_request, error: DataValidationError):
+        """Handles Value Errors from bad data"""
+        return bad_request(error)
 
-@app.errorhandler(status.HTTP_400_BAD_REQUEST)
-def bad_request(error):
-    """Handles bad requests with 400_BAD_REQUEST"""
-    message = str(error)
-    app.logger.warning(message)
-    return (
-        jsonify(
-            status=status.HTTP_400_BAD_REQUEST, error="Bad Request", message=message
-        ),
-        status.HTTP_400_BAD_REQUEST,
-    )
+    def bad_request(error):
+        """Handles bad requests with 400_BAD_REQUEST"""
+        message = str(error)
+        logger.warning(message)
+        return SortedJSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=_error_payload(status.HTTP_400_BAD_REQUEST, message),
+        )
 
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(_request, error: StarletteHTTPException):
+        """Handles every aborted request with the original payload shape"""
+        code = error.status_code
+        description = error.detail
+        # Starlette's own routing failures carry terse detail text; swap in the
+        # Werkzeug wording so the payload is identical to the Flask version.
+        if description in (None, "", ERROR_NAMES.get(code)):
+            description = DEFAULT_DESCRIPTIONS.get(code, str(description))
+        message = _flask_style_message(code, description)
+        if code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+            logger.error(message)
+        else:
+            logger.warning(message)
+        return SortedJSONResponse(
+            status_code=code, content=_error_payload(code, message)
+        )
 
-@app.errorhandler(status.HTTP_404_NOT_FOUND)
-def not_found(error):
-    """Handles resources not found with 404_NOT_FOUND"""
-    message = str(error)
-    app.logger.warning(message)
-    return (
-        jsonify(status=status.HTTP_404_NOT_FOUND, error="Not Found", message=message),
-        status.HTTP_404_NOT_FOUND,
-    )
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(  # pragma: no cover
+        _request, error: RequestValidationError
+    ):
+        """Bad path/query values were a routing miss in Flask, so 404 here too
 
+        Unreachable while every path id uses the ":int" convertor, which makes
+        a bad id fail to match the route at all. Kept as a safety net.
+        """
+        logger.warning("Request validation failed: %s", error)
+        message = _flask_style_message(
+            status.HTTP_404_NOT_FOUND,
+            DEFAULT_DESCRIPTIONS[status.HTTP_404_NOT_FOUND],
+        )
+        return SortedJSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content=_error_payload(status.HTTP_404_NOT_FOUND, message),
+        )
 
-@app.errorhandler(status.HTTP_405_METHOD_NOT_ALLOWED)
-def method_not_supported(error):
-    """Handles unsupported HTTP methods with 405_METHOD_NOT_SUPPORTED"""
-    message = str(error)
-    app.logger.warning(message)
-    return (
-        jsonify(
-            status=status.HTTP_405_METHOD_NOT_ALLOWED,
-            error="Method not Allowed",
-            message=message,
-        ),
-        status.HTTP_405_METHOD_NOT_ALLOWED,
-    )
-
-
-@app.errorhandler(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
-def mediatype_not_supported(error):
-    """Handles unsupported media requests with 415_UNSUPPORTED_MEDIA_TYPE"""
-    message = str(error)
-    app.logger.warning(message)
-    return (
-        jsonify(
-            status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            error="Unsupported media type",
-            message=message,
-        ),
-        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-    )
-
-
-@app.errorhandler(status.HTTP_500_INTERNAL_SERVER_ERROR)
-def internal_server_error(error):
-    """Handles unexpected server error with 500_SERVER_ERROR"""
-    message = str(error)
-    app.logger.error(message)
-    return (
-        jsonify(
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            error="Internal Server Error",
-            message=message,
-        ),
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    )
+    @app.exception_handler(Exception)
+    async def internal_server_error(_request, error: Exception):
+        """Handles unexpected server error with 500_SERVER_ERROR"""
+        message = _flask_style_message(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            DEFAULT_DESCRIPTIONS[status.HTTP_500_INTERNAL_SERVER_ERROR],
+        )
+        logger.error("%s: %s", message, error)
+        return SortedJSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=_error_payload(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, message
+            ),
+        )

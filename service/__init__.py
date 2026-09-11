@@ -15,51 +15,73 @@
 """
 Package: service
 Package for the application models and service routes
-This module creates and configures the Flask app and sets up the logging
+This module creates and configures the FastAPI app and sets up the logging
 and SQL database
 """
 
+import logging
 import sys
-from flask import Flask
+
+from fastapi import FastAPI
+
 from service import config
 from service.common import log_handlers
 
+logger = logging.getLogger("petstore")
+
 
 ############################################################
-# Initialize the Flask instance
+# Initialize the FastAPI instance
 ############################################################
-def create_app():
+def create_app() -> FastAPI:
     """Initialize the core application."""
-    # Create Flask application
-    app = Flask(__name__)
-    app.config.from_object(config)
+    # Create FastAPI application
+    # The interactive docs are switched off: /docs, /redoc, /openapi.json and
+    # /docs/oauth2-redirect all returned 404 on the original service, and the
+    # migration must not widen the URL surface.
+    app = FastAPI(
+        title="Pet Demo REST API Service",
+        version="1.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    # Werkzeug 404s on a trailing slash for routes declared without one;
+    # Starlette would redirect instead, so the redirect is turned off.
+    app.router.redirect_slashes = False
 
     # Initialize Plugins
     # pylint: disable=import-outside-toplevel
     from service.models import db
 
-    db.init_app(app)
+    db.init_engine(config.DATABASE_URI)
 
-    with app.app_context():
-        # Dependencies require we import the routes AFTER the Flask app is created
-        # pylint: disable=wrong-import-position, wrong-import-order, unused-import
-        from service import routes, models  # noqa: F401 E402
-        from service.common import error_handlers, cli_commands  # noqa: F401, E402
+    # Dependencies require we import the routes AFTER the app is created
+    # pylint: disable=wrong-import-position, wrong-import-order, unused-import
+    from service import models  # noqa: F401 E402
+    from service.routes import router  # noqa: F401 E402
+    from service.common import error_handlers, method_handlers  # noqa: F401, E402
 
-        try:
-            models.init_db()  # make our sqlalchemy tables
-        except Exception as error:  # pylint: disable=broad-except
-            app.logger.critical("%s: Cannot continue", error)
-            # gunicorn requires exit code 4 to stop spawning workers when they die
-            sys.exit(4)
+    app.include_router(router)
+    error_handlers.init_error_handlers(app)
 
-        # Set up logging for production
-        log_handlers.init_logging(app, "gunicorn.error")
+    method_handlers.init_automatic_methods(app)
+    method_handlers.init_slash_merging(app)
 
-        app.logger.info("╔%s╗", (60 * "═"))
-        app.logger.info("║%s║", "  P E T   S T O R E   S E R V I C E  ".center(60, " "))
-        app.logger.info("╚%s╝", (60 * "═"))
+    try:
+        models.init_db()  # make our sqlalchemy tables
+    except Exception as error:  # pylint: disable=broad-except # pragma: no cover
+        logger.critical("%s: Cannot continue", error)
+        # the process manager requires a non-zero exit code to stop respawning
+        sys.exit(4)
 
-        app.logger.info("Service initialized!")
+    # Set up logging for production
+    log_handlers.init_logging(logger, "uvicorn.error")
 
-        return app
+    logger.info("╔%s╗", (60 * "═"))
+    logger.info("║%s║", "  P E T   S T O R E   S E R V I C E  ".center(60, " "))
+    logger.info("╚%s╝", (60 * "═"))
+
+    logger.info("Service initialized!")
+
+    return app
